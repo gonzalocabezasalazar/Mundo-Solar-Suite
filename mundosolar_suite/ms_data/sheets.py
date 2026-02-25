@@ -1,5 +1,5 @@
 """
-data/sheets.py
+ms_data/sheets.py
 ══════════════════════════════════════════════════════════════
 Única fuente de verdad para todo acceso a Google Sheets.
 Conexión, cache, lectura y escritura — sin lógica de UI.
@@ -11,6 +11,7 @@ import datetime
 import random
 import string
 import hashlib
+import json
 
 import streamlit as st
 import pandas as pd
@@ -29,7 +30,7 @@ PRECIO_MWH  = 40
 HORAS_SOL   = 10
 
 # ══════════════════════════════════════════════════════════════
-# CONEXIÓN GOOGLE SHEETS
+# CONEXIÓN GOOGLE SHEETS (HÍBRIDA: LOCAL Y STREAMLIT CLOUD)
 # ══════════════════════════════════════════════════════════════
 def _crear_cliente_gspread():
     scopes = [
@@ -37,22 +38,33 @@ def _crear_cliente_gspread():
         "https://www.googleapis.com/auth/drive",
     ]
     creds = None
-    if os.path.exists("credentials.json"):
-        try:
-            creds = GACredentials.from_service_account_file("credentials.json", scopes=scopes)
-        except Exception:
-            pass
+    
+    # 1. Intentar leer desde Streamlit Secrets (Entorno Nube)
+    try:
+        if "google_credentials_json" in st.secrets:
+            # Convierte el string de secretos a diccionario
+            creds_dict = json.loads(st.secrets["google_credentials_json"])
+            creds = GACredentials.from_service_account_info(creds_dict, scopes=scopes)
+        elif "gcp_service_account" in st.secrets:
+            # Respaldo por si usaste el formato antiguo en Streamlit
+            creds = GACredentials.from_service_account_info(
+                dict(st.secrets["gcp_service_account"]), scopes=scopes)
+    except Exception as e:
+        print(f"Error leyendo secrets de Streamlit: {e}")
+
+    # 2. Si no estamos en la nube, leer archivo local (Entorno PC)
     if creds is None:
-        try:
-            if "gcp_service_account" in st.secrets:
-                creds = GACredentials.from_service_account_info(
-                    dict(st.secrets["gcp_service_account"]), scopes=scopes)
-        except Exception:
-            pass
+        if os.path.exists("credentials.json"):
+            try:
+                creds = GACredentials.from_service_account_file("credentials.json", scopes=scopes)
+            except Exception as e:
+                print(f"Error leyendo credentials.json local: {e}")
+                
     if creds is None:
-        st.error("🚫 No se encontraron credenciales. Coloca credentials.json en el directorio raíz.")
+        st.error("🚫 No se encontraron credenciales. Configura los secretos en Streamlit Cloud o coloca credentials.json en la raíz de tu proyecto local.")
         st.stop()
 
+    # 3. Autorizar conexión
     ultimo_error = None
     for intento, espera in enumerate([0, 2, 5, 10]):
         try:
@@ -66,9 +78,9 @@ def _crear_cliente_gspread():
                           'getaddrinfo', 'errno 11001', 'errno 110', 'name or service'])
             if not es_red:
                 break
+                
     st.error(f"🌐 No se pudo conectar a Google Sheets después de 4 intentos. "
              f"Verifica tu conexión a internet.\n\nDetalle: {ultimo_error}")
-    st.info("💡 Prueba cambiar DNS a 8.8.8.8 en tu adaptador de red.")
     st.stop()
 
 
@@ -187,10 +199,6 @@ def cargar_plantas():
 @st.cache_data(ttl=3600)
 def cargar_plantas_config():
     ws = get_worksheet("Plantas_Config")
-    # FIX: headers reales del sheet — 'Capacidad' (texto) y 'Num_Inversores'
-    # El sheet tiene: Planta_ID, Planta_Nombre, Modulo, Pmax_W, Isc_STC_A,
-    #                 Impp_STC_A, Panels_por_String, Umbral_Alerta_pct,
-    #                 Umbral_Critico_pct, Capacidad, Actualizado, Num_Inversores
     headers = ['Planta_ID', 'Planta_Nombre', 'Modulo', 'Pmax_W', 'Isc_STC_A',
                'Impp_STC_A', 'Panels_por_String', 'Umbral_Alerta_pct',
                'Umbral_Critico_pct', 'Capacidad', 'Actualizado', 'Num_Inversores']
@@ -199,17 +207,13 @@ def cargar_plantas_config():
         return pd.DataFrame()
     df = pd.DataFrame(data)
 
-    # FIX: Derivar Capacidad_MW desde columna 'Capacidad' (ej: "3 MW" -> 3.0)
-    # y agregar columna Capacidad_MW que el resto del código necesita
     if 'Capacidad' in df.columns:
         df['Capacidad_MW'] = df['Capacidad'].astype(str).str.extract(
             r'([\d.]+)').astype(float, errors='ignore').fillna(0)
-        # Si Capacidad ya es numérico puro, usar directo
         mask_numerico = pd.to_numeric(df['Capacidad'], errors='coerce').notna()
         df.loc[mask_numerico, 'Capacidad_MW'] = pd.to_numeric(
             df.loc[mask_numerico, 'Capacidad'], errors='coerce')
 
-    # Convertir columnas numéricas
     for col in ['Pmax_W', 'Isc_STC_A', 'Impp_STC_A', 'Panels_por_String',
                 'Umbral_Alerta_pct', 'Umbral_Critico_pct', 'Num_Inversores', 'Capacidad_MW']:
         if col in df.columns:
@@ -292,7 +296,6 @@ def cargar_mediciones():
     else:
         df['Restriccion_MW'] = 0
 
-    # Compatibilidad de nombre de columna
     if 'String_ID' in df.columns and 'String ID' not in df.columns:
         df.rename(columns={'String_ID': 'String ID'}, inplace=True)
     if 'Equipo' not in df.columns:
@@ -302,7 +305,6 @@ def cargar_mediciones():
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
 
-    # Eliminar filas vacías
     df = df[df['ID'].str.len() > 0]
     df = df[df['ID'] != 'ID']
     return df
@@ -321,7 +323,7 @@ def cargar_usuarios():
 
 
 # ══════════════════════════════════════════════════════════════
-# ESCRITURA
+# ESCRITURA Y UTILIDADES
 # ══════════════════════════════════════════════════════════════
 def generar_id(prefijo):
     now = datetime.datetime.now().strftime("%y%m%d%H%M%S")
@@ -383,7 +385,6 @@ def _autenticar(email: str, password: str) -> dict | None:
     }
 
 
-# ── Guards de rol ─────────────────────────────────────────────
 def _rol_actual() -> str:
     return st.session_state.get('usuario', {}).get('rol', '')
 
@@ -419,20 +420,17 @@ def invalidar_cache():
     cargar_mediciones.clear()
     cargar_usuarios.clear()
 
-    # FIX: importar analizar_mediciones aquí para evitar circular import al nivel módulo
     try:
         from ms_data.analysis import analizar_mediciones
         analizar_mediciones.clear()
     except Exception:
         pass
 
-    # Limpiar cache de análisis en session_state
     keys_to_del = [k for k in st.session_state if k.startswith('_an_')]
     for k in keys_to_del:
         del st.session_state[k]
 
 
-# ── Escritura hojas ───────────────────────────────────────────
 def guardar_planta(data: dict):
     ws = get_worksheet("Plantas")
     ws.append_row([
@@ -450,7 +448,6 @@ def guardar_planta_config(data: dict):
         data['Pmax_W'], data['Isc_STC_A'], data['Impp_STC_A'],
         data['Panels_por_String'], data['Umbral_Alerta_pct'],
         data['Umbral_Critico_pct'],
-        # FIX: guardar Capacidad como número (no texto "3 MW")
         data.get('Capacidad_MW', data.get('Capacidad', 0)),
         datetime.datetime.now().strftime("%Y-%m-%d"),
         data.get('Num_Inversores', 1),
@@ -517,6 +514,21 @@ def eliminar_por_id(hoja, col_id, valor_id):
     for i, val in enumerate(celdas):
         if str(val).strip() == str(valor_id).strip():
             ws.delete_rows(i + 1)
+            invalidar_cache()
+            return True
+    return False
+
+def cerrar_falla(falla_id, tecnico_id, resolucion, evidencia):
+    ws = get_worksheet("Fallas")
+    celdas = ws.col_values(1) # ID en la columna 1
+    for i, val in enumerate(celdas):
+        if str(val).strip() == str(falla_id).strip():
+            # Actualizamos las columnas de cierre
+            ws.update_cell(i + 1, 13, "CERRADO") # Estado
+            ws.update_cell(i + 1, 14, datetime.datetime.now().strftime("%Y-%m-%d")) # Fecha Cierre
+            ws.update_cell(i + 1, 15, tecnico_id) # Tecnico Cierre
+            ws.update_cell(i + 1, 16, resolucion) # Resolucion
+            ws.update_cell(i + 1, 17, evidencia) # Evidencia
             invalidar_cache()
             return True
     return False
