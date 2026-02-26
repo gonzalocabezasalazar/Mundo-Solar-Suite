@@ -182,6 +182,13 @@ def render(df_plantas, df_fallas, df_med, df_tec):
                 df_mxp = df_m_ok.groupby('Planta_Nombre')['Amperios'].mean().reset_index()
                 df_mxp.columns = ['Planta', 'I Media (A)']
                 df_mxp['I Media (A)'] = df_mxp['I Media (A)'].round(3)
+                # Eje Y dinámico: empieza cerca del mínimo para que barras sean visibles
+                _imin = df_mxp['I Media (A)'].min()
+                _imax = df_mxp['I Media (A)'].max()
+                _margen = max((_imax - _imin) * 0.4, 0.3)
+                _ymin = max(0, _imin - _margen)
+                _ymax = _imax + _margen
+
                 fig2 = px.bar(df_mxp, x='Planta', y='I Media (A)',
                               color='I Media (A)', color_continuous_scale='Blues',
                               title=f"Corriente media — {lbl}", text='I Media (A)')
@@ -190,6 +197,7 @@ def render(df_plantas, df_fallas, df_med, df_tec):
                                    plot_bgcolor='rgba(0,0,0,0)',
                                    paper_bgcolor='rgba(0,0,0,0)',
                                    xaxis_title='', yaxis_title='I Media (A)',
+                                   yaxis=dict(range=[_ymin, _ymax]),
                                    font_color=c_colors['text'],
                                    margin=dict(t=40, b=30, l=20, r=20))
                 st.plotly_chart(fig2, use_container_width=True)
