@@ -239,18 +239,54 @@ def apply_theme():
 
         /* ── TABS ── */
         .stTabs [data-baseweb="tab-list"] {{
-            gap: 6px; background: {c['surface2']};
-            padding: 5px; border-radius: 10px;
+            gap: 3px;
+            background: {c['azul_clr']};
+            padding: 8px 12px 0;
+            border-radius: 12px 12px 0 0;
+            border-bottom: 2px solid {c['azul_med']};
+            align-items: flex-end;
         }}
         .stTabs [data-baseweb="tab"] {{
-            border-radius: 7px !important;
+            border-radius: 8px 8px 0 0 !important;
             font-family: 'DM Sans' !important;
-            font-weight: 500 !important;
-            color: {c['text']} !important;
+            font-weight: 600 !important;
+            font-size: 0.82rem !important;
+            color: {c['subtext']} !important;
+            background: {c['surface2']} !important;
+            border: 1px solid {c['border']} !important;
+            border-bottom: none !important;
+            padding: 8px 16px 10px !important;
+            margin-bottom: -2px !important;
+            transition: all 0.15s !important;
+            position: relative !important;
+        }}
+        .stTabs [data-baseweb="tab"]:hover {{
+            background: {c['surface']} !important;
+            color: {c['azul_med']} !important;
         }}
         .stTabs [aria-selected="true"] {{
             background: {c['surface']} !important;
-            color: {c['azul_med']} !important;
+            color: {c['azul_osc']} !important;
+            font-weight: 700 !important;
+            border-color: {c['azul_med']} !important;
+            border-bottom-color: {c['surface']} !important;
+            z-index: 2 !important;
+        }}
+        .stTabs [data-baseweb="tab-panel"] {{
+            background: {c['surface']};
+            border: 1px solid {c['azul_med']};
+            border-top: none;
+            border-radius: 0 0 12px 12px;
+            padding: 1.2rem 1rem;
+        }}
+        /* ── LOGO IMAGEN SIDEBAR ── */
+        .sidebar-logo-img {{
+            width: 88px; height: 88px;
+            object-fit: contain;
+            border-radius: 50%;
+            display: block;
+            margin: 0 auto 4px;
+            filter: drop-shadow(0 3px 10px {c['card_shadow']});
         }}
 
         /* ── INPUTS / SELECTBOX ── */
