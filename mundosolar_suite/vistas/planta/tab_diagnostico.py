@@ -211,7 +211,7 @@ def render(planta_id, nombre, m_p, cfg, planta):
                 return clasificar_falla_isc(r['Amperios'], isc_stc_f, irr) if irr > 50 else clasificar_falla_amp(r['Amperios'])
             f_p['Tipo'] = f_p.apply(_clasif_row_d, axis=1)
             fig_tipo = px.pie(f_p, names='Tipo', hole=0.55,
-                              title=f"{len(f_p)} fusibles totales",
+                              title=f"Clasificación Histórica de Fusibles ({len(f_p)} registros)",
                               color_discrete_map=COLOR_FALLAS)
             fig_tipo.update_traces(textinfo='label+value')
             fig_tipo.update_layout(height=300, paper_bgcolor='white',
