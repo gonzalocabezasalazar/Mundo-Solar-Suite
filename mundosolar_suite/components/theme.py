@@ -289,3 +289,32 @@ def apply_theme():
 
     # Inyectar siempre — Streamlit necesita el CSS en cada rerun
     st.markdown(st.session_state[cache_key], unsafe_allow_html=True)
+
+def render_footer() -> None:
+    """
+    Renderiza la marca de agua al pie de cada página.
+    Usar st.markdown directo es el único método confiable en Streamlit
+    — el truco CSS footer:after no funciona porque Streamlit oculta
+    su propio footer con JavaScript después del render.
+    """
+    c = get_colors()
+    st.markdown(
+        f"""
+        <div style="
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            text-align: center;
+            padding: 6px 0;
+            font-size: 0.70rem;
+            color: {c['subtext']};
+            opacity: 0.55;
+            font-family: 'DM Sans', sans-serif;
+            letter-spacing: 0.3px;
+            pointer-events: none;
+            z-index: 999;
+        ">
+            ☀️ Mundo Solar Suite &nbsp;·&nbsp; Gonzalo Cabezas &nbsp;·&nbsp; 2026
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
