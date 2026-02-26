@@ -165,6 +165,7 @@ def render(df_plantas, df_fallas, df_med, df_tec):
 
         with col1:
             df_fxp = df_f_ok.groupby('Planta_Nombre').size().reset_index(name='Fallas')
+            _fmax = df_fxp['Fallas'].max() if not df_fxp.empty else 1
             fig = px.bar(df_fxp, x='Planta_Nombre', y='Fallas',
                          color='Fallas', color_continuous_scale='Reds',
                          title=f"Fusibles quemados — {lbl}", text='Fallas')
@@ -191,6 +192,7 @@ def render(df_plantas, df_fallas, df_med, df_tec):
 
                 fig2 = px.bar(df_mxp, x='Planta', y='I Media (A)',
                               color='I Media (A)', color_continuous_scale='Blues',
+                              range_color=[0, _ymax],
                               title=f"Corriente media — {lbl}", text='I Media (A)')
                 fig2.update_traces(textposition='outside')
                 fig2.update_layout(height=320, showlegend=False,
