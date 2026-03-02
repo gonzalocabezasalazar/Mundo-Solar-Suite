@@ -11,6 +11,7 @@ from components.theme import get_colors
 from ms_data.analysis import analizar_mediciones, _to_float, _to_int
 from ms_data.exports import generar_pdf_fallas, generar_pdf_mediciones
 from ms_data.exports import generar_excel_fallas, generar_excel_mediciones
+from ms_data.analysis import _run_in_thread
 
 
 def render(planta_id, nombre, f_p, m_p, cfg):
@@ -70,8 +71,8 @@ def render(planta_id, nombre, f_p, m_p, cfg):
             col_pdf, col_xls = st.columns(2)
             
             try:
-                # Generamos directamente SIN usar hilos (threads)
-                _pdf_bytes = generar_pdf_fallas(nombre, df_inf, df_med=df_med_inf, cfg=cfg)
+                with st.spinner("Generando PDF..."):
+                    _pdf_bytes = _run_in_thread(generar_pdf_fallas, nombre, df_inf, df_med=df_med_inf, cfg=cfg)
                 with col_pdf:
                     st.download_button("📄 Descargar PDF", _pdf_bytes,
                         f"Fallas_{nombre}_{per_sel}.pdf", "application/pdf", width='stretch')
@@ -79,8 +80,8 @@ def render(planta_id, nombre, f_p, m_p, cfg):
                 col_pdf.error(f"Falta librería o error en PDF: {e}")
                 
             try:
-                # Generamos directamente SIN usar hilos (threads)
-                _xls_bytes = generar_excel_fallas(nombre, df_inf, per_sel)
+                with st.spinner("Generando Excel..."):
+                    _xls_bytes = _run_in_thread(generar_excel_fallas, nombre, df_inf, per_sel)
                 with col_xls:
                     st.download_button("📊 Descargar Excel", _xls_bytes,
                         f"Fallas_{nombre}_{per_sel}.xlsx",
@@ -142,10 +143,10 @@ def render(planta_id, nombre, f_p, m_p, cfg):
                     col_pdf2, col_xls2 = st.columns(2)
                     
                     try:
-                        # Generamos directamente SIN usar hilos (threads)
-                        _pdf_med = generar_pdf_mediciones(nombre, m_inf, cfg,
-                            rest_inf_mw if rest_inf_mw > 0 else None, cap_inf_mw, inv_inf,
-                            df_fallas=f_p)
+                        with st.spinner("Generando PDF..."):
+                            _pdf_med = _run_in_thread(generar_pdf_mediciones, nombre, m_inf, cfg,
+                                rest_inf_mw if rest_inf_mw > 0 else None, cap_inf_mw, inv_inf,
+                                df_fallas=f_p)
                         with col_pdf2:
                             st.download_button("📄 Descargar PDF", _pdf_med,
                                 f"Auditoria_{nombre}_{sel_per_inf.replace(' ','_')}.pdf", "application/pdf", width='stretch')
@@ -153,8 +154,8 @@ def render(planta_id, nombre, f_p, m_p, cfg):
                         col_pdf2.error(f"Falta librería o error en PDF: {e}")
                         
                     try:
-                        # Generamos directamente SIN usar hilos (threads)
-                        _xls_med = generar_excel_mediciones(nombre, df_proc_inf, cfg, df_fallas=f_p)
+                        with st.spinner("Generando Excel..."):
+                            _xls_med = _run_in_thread(generar_excel_mediciones, nombre, df_proc_inf, cfg, df_fallas=f_p)
                         with col_xls2:
                             st.download_button("📊 Descargar Excel", _xls_med,
                                 f"Auditoria_{nombre}_{sel_per_inf.replace(' ','_')}.xlsx",
