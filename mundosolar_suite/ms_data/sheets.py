@@ -7,6 +7,7 @@ Conexión, cache, lectura y escritura — sin lógica de UI.
 """
 import os
 import time
+import concurrent.futures
 import datetime
 import random
 import string
