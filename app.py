@@ -305,8 +305,9 @@ elif pagina == 'usuarios':
 
 elif pagina == 'gestion':
     if puede('admin'):
-        from vistas.planta import tab_gestion as gestion_page
-        gestion_page.render(DF_PLANTAS, DF_CONFIG)
+        # Apuntamos al nuevo archivo que vamos a crear
+        from vistas.admin import gestion_plantas
+        gestion_plantas.render(DF_PLANTAS, DF_CONFIG)
     else:
         st.error('🚫 Solo administradores pueden acceder a Gestión de Plantas.')
 
