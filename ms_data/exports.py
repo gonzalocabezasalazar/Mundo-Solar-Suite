@@ -18,11 +18,11 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-# Dependencias internas — TODAS las utilidades de análisis necesarias
 from ms_data.analysis import (
     clean_text, _to_float, _to_int, obtener_nombre_mes, 
     clasificar_falla_amp, clasificar_falla_isc, analizar_mediciones
 )
+
 # ══════════════════════════════════════════════════════════════
 # PDF ENGINE
 # ══════════════════════════════════════════════════════════════
@@ -42,11 +42,9 @@ class PDF(FPDF):
         self.cell(0,10,f'Pagina {self.page_no()} - Mundo Solar Suite',0,0,'C')
 
 def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_str="Historico"):
-    """PDF de fallas enriquecido con datos de mediciones de strings."""
     pdf = PDF()
     pdf.add_page()
 
-    # Calcular Tipo con ajuste climático
     isc_stc = _to_float(cfg.get('Isc_STC_A', 9.07)) if cfg else 9.07
     df_fallas = df_fallas.copy()
     def _tipo_row(r):
@@ -54,11 +52,7 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
         return clasificar_falla_isc(r['Amperios'], isc_stc, irr) if irr > 50 else clasificar_falla_amp(r['Amperios'])
     df_fallas['Tipo'] = df_fallas.apply(_tipo_row, axis=1)
 
-    # KPIs desde mediciones si están disponibles
     prom_med   = df_med['Amperios'].mean() if df_med is not None and not df_med.empty else None
-    total_str  = len(df_med) if df_med is not None and not df_med.empty else 0
-
-    # Strings con desviación desde mediciones
     df_anom_med = pd.DataFrame()
     if df_med is not None and not df_med.empty and 'Desv_CB_pct' in df_med.columns:
         df_anom_med = df_med[df_med['Diagnostico'] != 'NORMAL'].copy()
@@ -73,22 +67,17 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
 
     total    = len(df_fallas)
     cortes   = len(df_fallas[df_fallas['Amperios'] == 0])
-    alertas  = len(df_fallas[df_fallas['Amperios'] > 0])
-    reinc    = len(df_fallas.groupby(['Inversor','Caja','String']).filter(lambda x: len(x) > 1))
 
-    # ── Portada ──
     pdf.set_fill_color(192, 57, 43)
     pdf.rect(0, 28, 210, 28, 'F')
     pdf.set_font("Arial","B",16); pdf.set_text_color(255,255,255)
     pdf.set_xy(10, 33)
-    # INYECTAMOS LA FECHA DE LA CAMPAÑA
     pdf.cell(0, 10, clean_text(f"INFORME DE FALLAS — {planta_nombre} ({periodo_str})"), 0, 1, 'C')
     pdf.set_font("Arial","",10); pdf.set_text_color(220,220,220)
     pdf.set_x(10)
     pdf.cell(0, 8, "Elaborado por Mundo Solar SpA", 0, 1, 'C')
     pdf.ln(12)
 
-    # ── KPIs ──
     prom_lbl = f"{prom_med:.3f}" if prom_med is not None else "-"
     kpis = [
         ("Fusibles registrados", str(total),    "1A3A5C"),
@@ -110,7 +99,6 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
         x0 += col_w
     pdf.ln(22); pdf.set_text_color(0,0,0); pdf.ln(4)
 
-    # ── Tabla fusibles ──
     pdf.set_font("Arial","B",9)
     pdf.set_fill_color(192,57,43); pdf.set_text_color(255,255,255)
     pdf.cell(0, 7, clean_text(f"Fusibles registrados — {total} eventos"), 0, 1, 'L', True)
@@ -145,7 +133,6 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
             for h, w in zip(hdrs, ws_): pdf.cell(w,7,h,1,0,'C',True)
             pdf.ln(); pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
 
-    # ── Tabla strings con desviación (desde mediciones) ──
     if not df_anom_med.empty:
         pdf.ln(5)
         pdf.set_font("Arial","B",9)
@@ -177,7 +164,6 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
                 for h, w in zip(hdrs2, ws2): pdf.cell(w,7,h,1,0,'C',True)
                 pdf.ln(); pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
 
-    # ── Sección Recurrencia en PDF ──
     conteo_pdf, recur_pdf, cb_pdf = _calcular_recurrencia_df(df_fallas)
     if not conteo_pdf.empty:
         pdf.ln(5)
@@ -189,7 +175,6 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
         pdf.cell(0, 7, clean_text(f"Recurrencia de Fallos — {n_rec_pdf} strings con mas de 1 falla ({tasa_pdf}%)"), 0, 1, 'L', True)
         pdf.ln(1)
 
-        # Mini KPIs
         pdf.set_font("Arial","B",8); pdf.set_text_color(255,255,255)
         kpis_p = [("Strings afect.", str(n_ub_pdf), "1A3A5C"),
                   ("Con recurrencia", str(n_rec_pdf), "C0392B"),
@@ -232,14 +217,39 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
                     for h,w in zip(hdrs_r, ws_r): pdf.cell(w,7,h,1,0,'C',True)
                     pdf.ln(); pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
 
+        # ── NUEVA TABLA TOP CBs PARA EL PDF ──
+        if not cb_pdf.empty:
+            pdf.ln(8)
+            pdf.set_font("Arial","B",9)
+            pdf.set_fill_color(192,57,43); pdf.set_text_color(255,255,255)
+            pdf.cell(0, 7, clean_text("Top Cajas (CB) con mayor incidencia de fallas"), 0, 1, 'L', True)
+            pdf.ln(1)
+            pdf.set_font("Arial","B",8)
+            pdf.set_fill_color(46,109,164); pdf.set_text_color(255,255,255)
+            hdrs_cb = ["Inversor", "Caja (CB)", "N Fallas", "Strings Afect.", "% del Total"]
+            ws_cb   = [40, 40, 30, 40, 35]
+            for h,w in zip(hdrs_cb, ws_cb): pdf.cell(w,7,h,1,0,'C',True)
+            pdf.ln()
+            pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
+            for i, row in cb_pdf.head(20).iterrows():
+                bg = (250,219,216) if int(row['N_Fallas']) > 3 else ((247,249,252) if i%2==0 else (255,255,255))
+                pdf.set_fill_color(*bg)
+                pct = f"{round(int(row['N_Fallas']) / total * 100, 1)}%" if total > 0 else "0%"
+                vals_cb = [str(row.get('Inversor','')), str(row['Caja']), str(int(row['N_Fallas'])), str(int(row['Strings'])), pct]
+                for v,w in zip(vals_cb, ws_cb): pdf.cell(w,6.5,clean_text(v),1,0,'C',True)
+                pdf.ln()
+                if pdf.get_y() > 265:
+                    pdf.add_page()
+                    pdf.set_font("Arial","B",7.5); pdf.set_fill_color(46,109,164); pdf.set_text_color(255,255,255)
+                    for h,w in zip(hdrs_cb, ws_cb): pdf.cell(w,7,h,1,0,'C',True)
+                    pdf.ln(); pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
+
     _out = pdf.output(dest='S')
     if isinstance(_out, bytes): return _out
     if isinstance(_out, bytearray): return bytes(_out)
     return _out.encode('latin-1')
 
-
 def _narrativa_auto(df_proc, planta_nombre):
-    """Genera narrativa automática de diagnóstico."""
     total   = len(df_proc)
     normales= len(df_proc[df_proc['Diagnostico']=='NORMAL'])
     alertas = len(df_proc[df_proc['Diagnostico']=='ALERTA'])
@@ -274,7 +284,6 @@ def _narrativa_auto(df_proc, planta_nombre):
     return texto
 
 def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, capacidad_mw=0, num_inversores=1, df_fallas=None, periodo_str="Actual"):
-    """PDF profesional completo: portada, KPIs, narrativa, graficos, tabla anomalias, acciones."""
     import tempfile, os
     pdf = PDF()
 
@@ -289,7 +298,6 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
     irradiancia = 698
     isc_ref     = round(isc_nom * irradiancia / 1000, 3)
 
-    # Restricción CEN
     rest_activa = restriccion_mw and capacidad_mw and restriccion_mw > 0 and capacidad_mw > 0
     factor_rest = (restriccion_mw / capacidad_mw) if rest_activa else 1.0
     mw_inv_rest = (restriccion_mw / num_inversores) if (rest_activa and num_inversores > 0) else restriccion_mw
@@ -310,7 +318,6 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
     cb_sum   = df_proc.groupby('Equipo')['Amperios'].agg(['mean','min','max','std']).reset_index()
     cb_sum.columns = ['Equipo','I_media','I_min','I_max','Istd']
 
-    # Texto de restricción CEN para incluir en PDF
     nota_restriccion = None
     if rest_activa:
         nota_restriccion = (
@@ -322,12 +329,7 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
             f"Los diagnosticos reflejan el desempeno real bajo condicion restringida."
         )
 
-    # ════════════════════════════
-    # PÁGINA 1 — PORTADA
-    # ════════════════════════════
     pdf.add_page()
-
-    # Banner azul superior
     pdf.set_fill_color(26, 58, 92)
     pdf.rect(0, 15, 210, 40, 'F')
     pdf.set_fill_color(244, 196, 48)
@@ -342,14 +344,12 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
 
     pdf.set_text_color(0,0,0); pdf.ln(10)
 
-    # Dos columnas: datos proyecto | parametros STC
     pdf.set_font("Arial","B",10); pdf.set_fill_color(26,58,92); pdf.set_text_color(255,255,255)
     pdf.cell(93, 8, "DATOS DEL PROYECTO", 0, 0, 'C', True)
     pdf.cell(4, 8, "", 0, 0)
     pdf.cell(93, 8, "PARAMETROS STC", 0, 1, 'C', True)
     pdf.set_text_color(0,0,0)
 
-    # INYECTAMOS LA FECHA DE LA CAMPAÑA EN LA PORTADA
     datos_proy = [("Planta:", clean_text(f"pMGD {planta_nombre}")),
                   ("Capacidad:", clean_text(capacidad)),
                   ("Modulo FV:", clean_text(f"{modulo} / {int(pmax)} Wp")),
@@ -375,7 +375,6 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         pdf.cell(55, 7, clean_text(vs), 0, 1, 'L', True)
     pdf.ln(5)
 
-    # KPIs grandes con color
     pdf.set_font("Arial","B",10); pdf.set_fill_color(26,58,92); pdf.set_text_color(255,255,255)
     pdf.cell(0, 8, "RESUMEN EJECUTIVO", 0, 1, 'C', True)
     pdf.set_text_color(0,0,0)
@@ -405,15 +404,11 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         pdf.cell(125, 7, clean_text(val), 0, 1, 'C', True)
     pdf.set_text_color(0,0,0)
 
-    # ════════════════════════════
-    # PÁGINA 2 — NARRATIVA + GRÁFICO BARRAS
-    # ════════════════════════════
     pdf.add_page()
     pdf.set_font("Arial","B",12); pdf.set_fill_color(26,58,92); pdf.set_text_color(255,255,255)
     pdf.cell(0, 9, "1. ANALISIS EJECUTIVO DE PERFORMANCE", 0, 1, 'C', True)
     pdf.set_text_color(0,0,0); pdf.ln(3)
 
-    # Nota restricción CEN (si aplica)
     if nota_restriccion:
         pdf.set_fill_color(255, 243, 205); pdf.set_draw_color(230, 160, 0)
         pdf.set_font("Arial","B",9); pdf.set_text_color(120, 80, 0)
@@ -429,7 +424,6 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
     pdf.multi_cell(0, 6, clean_text(narrativa))
     pdf.ln(5)
 
-    # Semaforo visual
     pdf.set_font("Arial","B",10); pdf.set_fill_color(26,58,92); pdf.set_text_color(255,255,255)
     pdf.cell(0, 8, "SEMAFORO DE ESTADO", 0, 1, 'C', True)
     pdf.set_text_color(0,0,0)
@@ -449,7 +443,6 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         pdf.cell(50-bar_w if 50-bar_w>0 else 1, 8, "", 0, 1, 'L', True)
     pdf.ln(5)
 
-    # Gráfico de barras por CB (Plotly → PNG embebido)
     pdf.set_font("Arial","B",12); pdf.set_fill_color(26,58,92); pdf.set_text_color(255,255,255)
     pdf.cell(0, 9, "2. CORRIENTE MEDIA POR COMBINER BOX", 0, 1, 'C', True)
     pdf.set_text_color(0,0,0); pdf.ln(2)
@@ -458,11 +451,11 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         colors_bar = []
         for _, row in cb_sum.iterrows():
             desv = ((row['I_media'] - prom_g) / prom_g * 100) if prom_g > 0 else 0
-            # Colores semaforo exactos para las barras de cada Combiner Box
             colors_bar.append('#C0392B' if desv <= uc else '#E67E22' if desv <= ua else '#1E8449')
             
         fig_bar = go_pdf.Figure(go_pdf.Bar(
-            x=cb_sum['Equipo'].str.replace('Inv-1>','',regex=False),
+            # AHORA MUESTRA EL EQUIPO COMPLETO, NO SE OCULTA "Inv-1>"
+            x=cb_sum['Equipo'],
             y=cb_sum['I_media'].round(3),
             marker=dict(color=colors_bar),
             text=cb_sum['I_media'].round(3), textposition='outside',
@@ -487,14 +480,8 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         pdf.set_text_color(0,0,0)
     pdf.ln(3)
 
-    # ════════════════════════════
-    # PÁGINA 3 — BOXPLOT + RESUMEN CB
-    # ════════════════════════════
-    # Boxplot
     try:
         import plotly.express as px_pdf
-        
-        # 1. Creamos una paleta de colores vibrantes
         paleta = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 
                    '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', 
                    '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', 
@@ -503,11 +490,9 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         equipos_unicos = df_proc['Equipo'].unique()
         mapa_colores = {eq: paleta[i] for i, eq in enumerate(equipos_unicos)}
 
-        # 2. Generamos el gráfico asignando explícitamente el mapa
         fig_box = px_pdf.box(df_proc, x='Equipo', y='Amperios', color='Equipo', 
                              color_discrete_map=mapa_colores, points='outliers')
         
-        # 3. FORZAMOS a que cada caja se pinte por dentro y por fuera (Anti-Kaleido bug)
         for trazo in fig_box.data:
             color_asignado = mapa_colores.get(trazo.name, '#1F5C8B')
             trazo.fillcolor = color_asignado
@@ -522,8 +507,8 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
             yaxis=dict(showgrid=True, gridcolor='#f0f0f0', title='Corriente (A)'),
             font=dict(family='Arial', size=10)
         )
-        fig_box.update_xaxes(ticktext=[e.replace('Inv-1>','') for e in equipos_unicos],
-                             tickvals=equipos_unicos)
+        # YA NO RECORTA EL NOMBRE "Inv-1" AQUI TAMPOCO
+        fig_box.update_xaxes(ticktext=equipos_unicos, tickvals=equipos_unicos)
                              
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tf:
             fig_box.write_image(tf.name, scale=2)
@@ -535,9 +520,8 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         pdf.cell(0, 8, f"[Boxplot no disponible: {e}]", 0, 1, 'C')
         pdf.set_text_color(0,0,0)
 
-    # Tabla resumen CB
     pdf.set_font("Arial","B",9); pdf.set_fill_color(46,109,164); pdf.set_text_color(255,255,255)
-    h_cols = ["Caja","I media","I min","I max","Std Dev","Desv.Global%","Alertas","Criticos"]
+    h_cols = ["Equipo (CB)","I media","I min","I max","Std Dev","Desv.Global%","Alertas","Criticos"]
     w_cols = [38,20,18,18,18,25,18,18]
     for h,w in zip(h_cols,w_cols): pdf.cell(w,8,h,1,0,'C',True)
     pdf.ln(); pdf.set_text_color(0,0,0)
@@ -550,14 +534,11 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         bg_row = (250,219,216) if n_cr>0 else (254,249,231) if n_al>0 else bg_alt
         pdf.set_fill_color(*bg_row)
         pdf.set_font("Arial","",8)
-        vals = [str(r['Equipo']).replace('Inv-1>',''), f"{r['I_media']:.3f}", f"{r['I_min']:.2f}",
+        vals = [str(r['Equipo']), f"{r['I_media']:.3f}", f"{r['I_min']:.2f}",
                 f"{r['I_max']:.2f}", f"{r['Istd']:.3f}", f"{desv_g:+.2f}%", str(n_al), str(n_cr)]
         for v,w in zip(vals,w_cols): pdf.cell(w,7,clean_text(v),1,0,'C',True)
         pdf.ln()
 
-    # ════════════════════════════
-    # PÁGINA 4 — STRINGS FUERA DE RANGO + ACCIONES
-    # ════════════════════════════
     pdf.add_page()
     pdf.set_font("Arial","B",12); pdf.set_fill_color(192,57,43); pdf.set_text_color(255,255,255)
     pdf.cell(0, 9, clean_text(f"4. STRINGS FUERA DE RANGO — {len(df_anom)} identificados"), 0, 1, 'C', True)
@@ -589,7 +570,7 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
             if 'CRITICO' in diag or 'CORTE' in diag: pdf.set_fill_color(250,219,216)
             else:                                      pdf.set_fill_color(254,249,231)
             pdf.set_font("Arial","",7)
-            vals = [str(i), str(r.get('Equipo','')).replace('Inv-1>',''),
+            vals = [str(i), str(r.get('Equipo','')),
                     str(r.get('String ID','')),
                     f"{_to_float(r.get('Amperios',0)):.2f}",
                     f"{_to_float(r.get('Promedio_Caja',0)):.3f}",
@@ -603,68 +584,13 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
                 for h,w in zip(h2,w2): pdf.cell(w,8,h,1,0,'C',True)
                 pdf.ln(); pdf.set_text_color(0,0,0)
 
-    # ── Sección Recurrencia en PDF ──
-    conteo_pdf, recur_pdf, cb_pdf = _calcular_recurrencia_df(df_fallas)
-    if not conteo_pdf.empty:
-        pdf.ln(5)
-        pdf.set_font("Arial","B",9)
-        pdf.set_fill_color(192,57,43); pdf.set_text_color(255,255,255)
-        n_rec_pdf = len(recur_pdf)
-        n_ub_pdf  = len(conteo_pdf)
-        tasa_pdf  = round(n_rec_pdf / n_ub_pdf * 100, 1) if n_ub_pdf > 0 else 0
-        pdf.cell(0, 7, clean_text(f"Recurrencia de Fallos — {n_rec_pdf} strings con mas de 1 falla ({tasa_pdf}%)"), 0, 1, 'L', True)
-        pdf.ln(1)
-
-        # Mini KPIs
-        pdf.set_font("Arial","B",8); pdf.set_text_color(255,255,255)
-        kpis_p = [("Strings afect.", str(n_ub_pdf), "1A3A5C"),
-                  ("Con recurrencia", str(n_rec_pdf), "C0392B"),
-                  ("Tasa recurrencia", f"{tasa_pdf}%", "E67E22"),
-                  ("Max fallas/str", str(int(conteo_pdf['N_Fallas'].max())), "8B0000")]
-        for lbl_p, val_p, col_p in kpis_p:
-            r_p,g_p,b_p = int(col_p[:2],16),int(col_p[2:4],16),int(col_p[4:],16)
-            pdf.set_fill_color(r_p,g_p,b_p)
-            pdf.cell(42, 10, val_p, 0, 0, 'C', True)
-        pdf.ln(10)
-        pdf.set_font("Arial","",7); pdf.set_text_color(0,0,0)
-        for lbl_p, val_p, col_p in kpis_p:
-            pdf.cell(42, 5, clean_text(lbl_p), 0, 0, 'C')
-        pdf.ln(7)
-
-        if not recur_pdf.empty:
-            pdf.set_font("Arial","B",8)
-            pdf.set_fill_color(46,109,164); pdf.set_text_color(255,255,255)
-            hdrs_r = ["Ubicacion","N Fallas","Categoria","Primera","Ultima","MTBF(d)"]
-            ws_r   = [55, 16, 28, 22, 22, 17]
-            for h,w in zip(hdrs_r, ws_r): pdf.cell(w,7,h,1,0,'C',True)
-            pdf.ln()
-            pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
-            color_r = {'Sin recurrencia':(247,249,252),'Recurrente (2x)':(254,249,231),
-                       'Critico (3-4x)':(250,219,216),'Cronico (5+)':(245,183,177)}
-            for _, row in recur_pdf.head(30).iterrows():
-                cat = str(row.get('Categoria',''))
-                bg  = color_r.get(cat,(247,249,252))
-                pdf.set_fill_color(*bg)
-                prim = row['Primera'].strftime('%d/%m/%y') if pd.notna(row.get('Primera')) else '-'
-                ult  = row['Ultima'].strftime('%d/%m/%y')  if pd.notna(row.get('Ultima'))  else '-'
-                mtbf = f"{row['MTBF_dias']:.1f}" if row.get('MTBF_dias') is not None else '-'
-                vals_r = [str(row['Ubicacion'])[:28], str(int(row['N_Fallas'])),
-                          clean_text(cat)[:18], prim, ult, mtbf]
-                for v,w in zip(vals_r, ws_r): pdf.cell(w,6.5,clean_text(v),1,0,'C',True)
-                pdf.ln()
-                if pdf.get_y() > 265:
-                    pdf.add_page()
-                    pdf.set_font("Arial","B",7.5); pdf.set_fill_color(46,109,164); pdf.set_text_color(255,255,255)
-                    for h,w in zip(hdrs_r, ws_r): pdf.cell(w,7,h,1,0,'C',True)
-                    pdf.ln(); pdf.set_font("Arial","",7.5); pdf.set_text_color(0,0,0)
-
     _out = pdf.output(dest='S')
     if isinstance(_out, bytes): return _out
     if isinstance(_out, bytearray): return bytes(_out)
     return _out.encode('latin-1')
 
 # ══════════════════════════════════════════════════════════════
-# EXCEL ENGINE — Replica exacta del informe de referencia + hoja Fallas
+# EXCEL ENGINE
 # ══════════════════════════════════════════════════════════════
 def _fill(c): return PatternFill('solid',start_color=c,fgColor=c)
 def _fnt(bold=False,size=10,color='000000',italic=False):
@@ -682,9 +608,7 @@ def _dc(cell,val,bg='FFFFFF',bold=False,h='center',fmt=None,color='000000'):
     cell.fill=_fill(bg); cell.alignment=_aln(h=h); cell.border=_brd()
     if fmt: cell.number_format=fmt
 
-
 def _calcular_recurrencia_df(df_fallas):
-    """Calcula recurrencia de fallos. Retorna (conteo_df, recurrentes_df, cb_rank_df)."""
     if df_fallas is None or df_fallas.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     df = df_fallas.copy()
@@ -711,7 +635,9 @@ def _calcular_recurrencia_df(df_fallas):
     conteo['MTBF_dias'] = conteo.apply(
         lambda r: round(r['Dias'] / (r['N_Fallas']-1), 1) if r['N_Fallas'] > 1 else None, axis=1)
     recurrentes = conteo[conteo['N_Fallas'] > 1].copy()
-    cb_rank = (df.groupby('Caja')
+    
+    # ── AQUÍ CORREGIMOS EL ERROR: AHORA AGRUPA POR INVERSOR Y CAJA ──
+    cb_rank = (df.groupby(['Inversor', 'Caja'])
                  .agg(N_Fallas=('ID','count'), Strings=('String','nunique'))
                  .reset_index().sort_values('N_Fallas', ascending=False))
     return conteo, recurrentes, cb_rank
@@ -738,7 +664,7 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
     ws['G2'].font=_fnt(bold=True,color='FFFFFF'); ws['G2'].fill=_fill(ROJO); ws['G2'].alignment=_aln()
     ws.row_dimensions[2].height=22
     for i,(h,_) in enumerate(cols,1): _hdr(ws.cell(3,i),h,bg=AZUL_M); ws.row_dimensions[3].height=26
-    df_orig=df.copy()  # guardar antes de modificar para recurrencia
+    df_orig=df.copy()  
     df=df.copy(); df['Tipo']=df['Amperios'].apply(clasificar_falla_amp)
     for i,(_,r) in enumerate(df.iterrows(),4):
         tipo=str(r.get('Tipo',''))
@@ -749,20 +675,19 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
         for j,v in enumerate(vals,1):
             _dc(ws.cell(i,j),v,bg=bg,fmt='0.00' if j==7 else None,h='left' if j==9 else 'center')
         ws.row_dimensions[i].height=18
+    
     # ══ HOJA RECURRENCIA ════════════════════════════════════
     conteo_r, recur_r, cb_r = _calcular_recurrencia_df(df_orig)
     ws_rec = wb.create_sheet('RECURRENCIA')
     ws_rec.sheet_view.showGridLines = False
     ws_rec.freeze_panes = 'A4'
 
-    # Título
     ws_rec.merge_cells('A1:H1')
     ws_rec['A1'].value = clean_text(f'ANALISIS DE RECURRENCIA DE FALLOS — {planta_nombre} — {periodo}')
     ws_rec['A1'].font = _fnt(bold=True, size=13, color='FFFFFF')
     ws_rec['A1'].fill = _fill(ROJO); ws_rec['A1'].alignment = _aln()
     ws_rec.row_dimensions[1].height = 28
 
-    # KPIs fila 2
     n_total_r  = len(df)
     n_ubic_r   = len(conteo_r)
     n_recur_r  = len(recur_r)
@@ -782,7 +707,6 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
         c_kpi.fill = _fill(color); c_kpi.alignment = _aln()
     ws_rec.row_dimensions[2].height = 22
 
-    # Headers tabla
     hdrs_r = ['Ubicacion', 'N Fallas', 'Categoria', 'Primera Falla', 'Ultima Falla', 'Dias entre fallas', 'MTBF (dias)', 'Inversor']
     widths_r = [30, 10, 18, 14, 14, 18, 14, 12]
     for i, (h, w) in enumerate(zip(hdrs_r, widths_r), 1):
@@ -791,10 +715,8 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
     ws_rec.row_dimensions[3].height = 26
 
     color_cat = {
-        'Sin recurrencia': 'F7F9FC',
-        'Recurrente (2x)': 'FEF9E7',
-        'Critico (3-4x)':  'FADBD8',
-        'Cronico (5+)':    'F5B7B1',
+        'Sin recurrencia': 'F7F9FC', 'Recurrente (2x)': 'FEF9E7',
+        'Critico (3-4x)':  'FADBD8', 'Cronico (5+)':    'F5B7B1',
     }
     for idx, (_, row) in enumerate(conteo_r.iterrows(), 4):
         cat = str(row.get('Categoria', ''))
@@ -814,21 +736,24 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
             if fmt and isinstance(v, (int, float)): c.number_format = fmt
         ws_rec.row_dimensions[idx].height = 18
 
-    # Sub-tabla: Top CBs
+    # ── SUB-TABLA TOP CBs CORREGIDA ──
     start_cb = len(conteo_r) + 6
-    ws_rec.merge_cells(f'A{start_cb}:D{start_cb}')
+    ws_rec.merge_cells(f'A{start_cb}:E{start_cb}') # Ahora llega hasta la columna E
     ws_rec[f'A{start_cb}'].value = clean_text('TOP CAJAS (CB) CON MAS FALLAS')
     ws_rec[f'A{start_cb}'].font = _fnt(bold=True, size=11, color='FFFFFF')
     ws_rec[f'A{start_cb}'].fill = _fill(ROJO); ws_rec[f'A{start_cb}'].alignment = _aln()
     ws_rec.row_dimensions[start_cb].height = 22
-    for j, h in enumerate(['Caja (CB)', 'N Fallas', 'Strings Afectados', '% del Total'], 1):
+    
+    hdrs_cb = ['Inversor', 'Caja (CB)', 'N Fallas', 'Strings Afectados', '% del Total']
+    for j, h in enumerate(hdrs_cb, 1):
         _hdr(ws_rec.cell(start_cb + 1, j), h, bg=AZUL_M)
+        
     for idx2, (_, row) in enumerate(cb_r.iterrows(), start_cb + 2):
         pct = round(int(row['N_Fallas']) / n_total_r * 100, 1) if n_total_r > 0 else 0
-        for j, v in enumerate([str(row['Caja']), int(row['N_Fallas']),
-                                int(row['Strings']), f'{pct}%'], 1):
+        vals_cb = [str(row.get('Inversor', '')), str(row['Caja']), int(row['N_Fallas']), int(row['Strings']), f'{pct}%']
+        for j, v in enumerate(vals_cb, 1):
             c = ws_rec.cell(idx2, j)
-            c.value = v; c.fill = _fill('FADBD8' if j==2 and int(row['N_Fallas'])>3 else 'F7F9FC')
+            c.value = v; c.fill = _fill('FADBD8' if j==3 and int(row['N_Fallas'])>3 else 'F7F9FC')
             c.alignment = _aln(); c.border = _brd(); c.font = _fnt(size=9)
         ws_rec.row_dimensions[idx2].height = 18
 
@@ -836,7 +761,6 @@ def generar_excel_fallas(planta_nombre, df, periodo="Historico"):
     return out.getvalue()
 
 def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, periodo_str="Actual"):
-    """Excel profesional 6 hojas: Portada, Mediciones, Resumen CB, Fuera de Rango, Graficos, Fallas."""
     AZUL='1A3A5C'; AZUL_M='2E6DA4'; AZUL_C='D8E8F5'; AZUL_OSC='1F5C8B'
     VERDE='1E8449'; VERDE_C='D5F5E3'; ROJO='C0392B'; ROJO_C='FADBD8'
     AMAR='F9D03F'; AMAR_C='FEF9E7'; NARANJA='E67E22'; NAR_C='FDEBD0'
@@ -853,7 +777,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     irr       = 698
     isc_ref   = round(isc_nom * irr / 1000, 3)
 
-    # Reemplazamos la fecha del día por la fecha real de la campaña filtrada
     fecha_str = periodo_str
 
     if 'String ID' not in df_proc.columns and 'String_ID' in df_proc.columns:
@@ -867,7 +790,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     global_avg = df_proc['Amperios'].mean()
     df_al    = df_proc[df_proc['Diagnostico']!='NORMAL'].sort_values('Desv_CB_pct').reset_index(drop=True)
 
-    # Resumen por CB
     cb_s = df_proc.groupby('Equipo').agg(
         N_Strings=('Amperios','count'), Imedio=('Amperios','mean'),
         Imin=('Amperios','min'), Imax=('Amperios','max'), Istd=('Amperios','std'),
@@ -876,11 +798,9 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     ).round(3).reset_index()
     cb_s['Desv_Global_pct'] = ((cb_s['Imedio']-global_avg)/global_avg*100).round(2)
     cb_s['PR_est_pct']      = (cb_s['Imedio']/isc_ref*100).round(2)
-    cb_min = cb_s.loc[cb_s['Imedio'].idxmin()]
+    cb_min = cb_s.loc[cb_s['Imedio'].idxmin()] if not cb_s.empty else None
 
     wb = Workbook()
-
-    # ══ PORTADA ══════════════════════════════════════════════
     ws_p = wb.active; ws_p.title='PORTADA'
     ws_p.sheet_view.showGridLines=False
     for col,w in zip(range(1,9),[2,18,18,18,18,18,18,2]):
@@ -893,7 +813,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     ws_p['B3'].font=_fnt(bold=True,size=22,color=BLC); ws_p['B3'].alignment=_aln(); ws_p.row_dimensions[3].height=34
     ws_p.merge_cells('B4:G4'); ws_p['B4'].value=clean_text(f'Mundo Solar SpA      pMGD Solar — {planta_nombre} | {capacidad}')
     ws_p['B4'].font=_fnt(size=14,color='A8D1F5'); ws_p['B4'].alignment=_aln(); ws_p.row_dimensions[4].height=24
-    # Barra dorada
     for col in range(2,8): ws_p.cell(6,col).fill=_fill(DORADO)
 
     info_rows=[
@@ -929,8 +848,10 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
                ('Strings NORMAL',str(n_norm),VERDE_C,VERDE),
                ('Strings ALERTA',str(n_aler),AMAR_C,NARANJA),
                ('Strings CRITICO',str(n_crit),ROJO_C,ROJO),
-               ('I Media Global',f'{global_avg:.3f} A',AZUL_C,AZUL_OSC),
-               ('CB mas baja',clean_text(f"{cb_min['Equipo']} ({cb_min['Imedio']:.3f}A)"),ROJO_C,ROJO)]
+               ('I Media Global',f'{global_avg:.3f} A',AZUL_C,AZUL_OSC)]
+    if cb_min is not None:
+        kpis_port.append(('CB mas baja',clean_text(f"{cb_min['Equipo']} ({cb_min['Imedio']:.3f}A)"),ROJO_C,ROJO))
+               
     for i,(lb,val,bg,fg) in enumerate(kpis_port):
         r3=kpi_r+1+i; ws_p.row_dimensions[r3].height=20
         ws_p.merge_cells(f'B{r3}:D{r3}'); c=ws_p.cell(r3,2); c.value=lb
@@ -938,7 +859,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
         ws_p.merge_cells(f'E{r3}:G{r3}'); c2=ws_p.cell(r3,5); c2.value=val
         c2.font=_fnt(bold=True,size=11,color=fg); c2.fill=_fill(bg); c2.alignment=_aln(); c2.border=_brd()
 
-    # ══ MEDICIONES STRINGS ═══════════════════════════════════
     ws_d=wb.create_sheet('MEDICIONES STRINGS'); ws_d.sheet_view.showGridLines=False; ws_d.freeze_panes='A4'
     cw=[5,14,10,12,14,16,16,14,14,12]
     ct=['#','Combiner Box','String','I medida (A)','Isc ref (A)','Prom. CB (A)','Desv. CB (%)','Desv. Isc (%)','Estado','P est. (W)']
@@ -980,7 +900,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     ws_d.cell(lr,4).value=f'=AVERAGE(D4:D{lr-1})'; ws_d.cell(lr,4).number_format='0.000'
     ws_d.cell(lr,10).value=f'=SUM(J4:J{lr-1})'; ws_d.cell(lr,10).number_format='#,##0'
 
-    # ══ RESUMEN POR CB ════════════════════════════════════════
     ws_cb=wb.create_sheet('RESUMEN POR CB'); ws_cb.sheet_view.showGridLines=False; ws_cb.freeze_panes='A4'
     cw2=[5,14,10,12,10,10,10,16,12,12,12]
     ct2=['#','Combiner Box','N Strings','I media (A)','I min (A)','I max (A)','Std Dev','Desv. Global (%)','PR est. (%)','Str. Alerta','Str. Critico']
@@ -1010,7 +929,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
         c11.fill=_fill(ROJO_C if cr>0 else bg); c11.font=_fnt(bold=cr>0,color=ROJO if cr>0 else '000000')
         ws_cb.row_dimensions[r5].height=20
 
-    # ══ STRINGS FUERA DE RANGO ═══════════════════════════════
     ws_al=wb.create_sheet('STRINGS FUERA DE RANGO'); ws_al.sheet_view.showGridLines=False
     cw3=[5,14,10,12,14,16,12,30,25]
     ct3=['#','Combiner Box','String','I medida (A)','Prom. CB (A)','Desv. CB (%)','Estado','Posible Causa','Accion Recomendada']
@@ -1045,7 +963,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
             c.alignment=Alignment(horizontal='left',vertical='center',wrap_text=True); c.font=_fnt(size=9)
         ws_al.row_dimensions[r6].height=28
 
-    # ══ GRÁFICOS ═════════════════════════════════════════════
     from openpyxl.chart import BarChart, Reference
     ws_g=wb.create_sheet('GRAFICOS'); ws_g.sheet_view.showGridLines=False
     ws_g.merge_cells('A1:P1'); ws_g['A1'].value=clean_text(f'GRAFICOS — {planta_nombre} {capacidad}')
@@ -1076,7 +993,6 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
         if y_max: ch.y_axis.scaling.max=y_max
         ws_g.add_chart(ch,anchor)
 
-    # ══ FALLAS ═══════════════════════════════════════════════
     ws_fal=wb.create_sheet('FALLAS')
     if df_fallas is not None and not df_fallas.empty:
         ws_fal.sheet_view.showGridLines=False; ws_fal.freeze_panes='A4'

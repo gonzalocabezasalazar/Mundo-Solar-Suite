@@ -1,7 +1,6 @@
 """
 vistas/planta/tab_fusibles.py
 Registro y visualización de fusibles operados (fallas).
-Filtro rango libre desde/hasta. Ingreso solo admin/técnico.
 """
 import datetime
 import streamlit as st
@@ -9,34 +8,44 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 
-
 from components.theme import get_colors
-from ms_data.sheets import guardar_falla, borrar_fila_sheet, puede, invalidar_cache, generar_id
+from components.filters import flexible_period_filter
+from ms_data.sheets import guardar_falla, eliminar_por_id, puede, invalidar_cache, generar_id
 from ms_data.analysis import clasificar_falla_amp, clasificar_falla_isc, desv_isc_pct, _to_float, _to_int
 
-# Colores para los gráficos de fallas
 COLOR_FALLAS = {
-    "Operativo (±5%)":"#1E8449","Alerta (-5% a -15%)":"#F39C12",
-    "Crítico (-15% a -30%)":"#E74C3C","Fallo grave (<-30%)":"#922B21",
-    "OC (0A)":"#C0392B","Sobrecarga (>+15%)":"#8E44AD",
+    "Operativo (±5%)":"#1E8449", "Alerta (-5% a -15%)":"#F39C12",
+    "Crítico (-15% a -30%)":"#E74C3C", "Fallo grave (<-30%)":"#922B21",
+    "OC (0A)":"#C0392B", "Sobrecarga (>+15%)":"#8E44AD",
     "Fatiga (<4A)":"#E67E22", "Alerta (4-6A)":"#F39C12", "Sobrecarga (>8A)":"#F4C430",
     "Operativo (6-8A)":"#1E8449"
 }
 
 def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
-    """
-    Tab Fusibles — reemplaza tab_fallas de pagina_planta.
-    """
     c = get_colors()
-    hoy = pd.Timestamp.now()
 
-    # YA NO USAMOS 'with tab_fallas:' PORQUE __init__.py YA LO PONE EN SU PESTAÑA
     st.subheader(f"Registro de Fallas — {nombre}")
 
-    # Key dinámica para resetear formulario tras guardar
+    # ── 1. FILTRO INDEPENDIENTE (Popover) ──
+    filtro = flexible_period_filter(
+        key=f"filtro_fus_{planta_id}",
+        df_med=m_p,
+        df_fallas=f_p,
+        default_mode="Histórico"
+    )
+    m_p = filtro['df_med']
+    f_p = filtro['df_fallas']
+    st.caption(f"Mostrando datos para: **{filtro['label']}**")
+    
+    # ── 2. ESTADO DEL FORMULARIO ──
     if 'falla_form_key' not in st.session_state:
         st.session_state['falla_form_key'] = 0
 
+    if st.session_state.get('falla_guardada'):
+        st.success("✅ Falla registrada correctamente. Formulario reiniciado.")
+        st.session_state['falla_guardada'] = False
+
+    # ── 3. FORMULARIO DE INGRESO ──
     if puede("ingresar"):
         with st.expander("➕ Registrar nueva falla", expanded=False):
             with st.form(f"form_falla_{st.session_state['falla_form_key']}"):
@@ -45,14 +54,13 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                 f_inv   = fc2.number_input("Inversor N°", 1, 50)
                 f_caja  = fc3.number_input("Caja N°", 1, 100)
                 f_str   = fc4.number_input("String N°", 1, 30)
+                
                 fc5,fc6,fc7,fc8 = st.columns(4)
                 f_pol   = fc5.selectbox("Polaridad", ["Positivo (+)","Negativo (-)"])
                 f_amp   = fc6.number_input("Amperios medidos", 0.0, 30.0, step=0.1)
-                f_irr   = fc7.number_input("Irradiancia (W/m²)", 0, 1200, 700, step=10,
-                                           help="Irradiancia al momento de la medición.")
+                f_irr   = fc7.number_input("Irradiancia (W/m²)", 0, 1200, 700, step=10, help="Irradiancia al momento de la medición.")
                 f_nota  = fc8.text_input("Nota")
 
-                # Mostrar clasificación en tiempo real
                 if cfg:
                     isc_stc = _to_float(cfg.get('Isc_STC_A', 9.07))
                     isc_ref_live = round(isc_stc * (f_irr / 1000), 3) if f_irr > 0 else 0
@@ -70,13 +78,12 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                         Clasificación: <b style="color:{col_live}">{tipo_live}</b>
                         </div>''', unsafe_allow_html=True)
 
-                # Selector técnico
                 tec_opts = ["(Sin asignar)"]
                 if not df_tec.empty and 'Nombre' in df_tec.columns:
                     tec_opts += df_tec['Nombre'].tolist()
                 f_tec = st.selectbox("Técnico", tec_opts)
 
-                if puede("ingresar") and st.form_submit_button("💾 Guardar Falla", type="primary"):
+                if st.form_submit_button("💾 Guardar Falla", type="primary"):
                     tec_id = ''
                     if f_tec != "(Sin asignar)" and not df_tec.empty:
                         trow = df_tec[df_tec['Nombre'] == f_tec]
@@ -101,19 +108,15 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                     st.session_state['falla_guardada'] = True
                     st.rerun()
 
-    # Mensaje de confirmación tras guardar falla
-    if st.session_state.get('falla_guardada'):
-        st.success("✅ Falla registrada correctamente. Formulario reiniciado.")
-        st.session_state['falla_guardada'] = False
-
+    # ── 4. RESUMEN Y PLANILLAS ──
     if not f_p.empty:
+        st.divider()
         n_f = len(f_p)
         isc_stc_f = _to_float(cfg.get('Isc_STC_A', 9.07)) if cfg else 9.07
             
         def _clasif_row(r):
             irr = _to_float(r.get('Irradiancia_Wm2', 0))
-            if irr > 50:
-                return clasificar_falla_isc(r['Amperios'], isc_stc_f, irr)
+            if irr > 50: return clasificar_falla_isc(r['Amperios'], isc_stc_f, irr)
             return clasificar_falla_amp(r['Amperios'])
             
         f_p['Tipo'] = f_p.apply(_clasif_row, axis=1)
@@ -125,11 +128,7 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
 
         with c_h:
             f_p_bar = f_p.copy()
-            f_p_bar['Ubicacion'] = (
-                f_p_bar['Inversor'].astype(str) + ' › ' +
-                f_p_bar['Caja'].astype(str) + ' › ' +
-                f_p_bar['String'].astype(str)
-            )
+            f_p_bar['Ubicacion'] = f_p_bar['Inversor'].astype(str) + ' › ' + f_p_bar['Caja'].astype(str) + ' › ' + f_p_bar['String'].astype(str)
             f_p_bar['Fecha_str'] = pd.to_datetime(f_p_bar['Fecha'], errors='coerce').dt.strftime('%d/%m/%Y').fillna('-')
             f_p_bar['Amp_display'] = f_p_bar['Amperios'].apply(lambda x: 0.3 if x == 0 else x)
             f_p_bar['Fuente'] = 'Fusible'
@@ -137,22 +136,16 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
             if not m_p.empty:
                 m_anom = m_p.copy()
                 m_anom['Promedio_Caja'] = m_anom.groupby('Equipo')['Amperios'].transform('mean')
-                m_anom['Desv_CB_pct']   = np.where(
-                    m_anom['Promedio_Caja'] > 0,
-                    ((m_anom['Amperios'] - m_anom['Promedio_Caja']) / m_anom['Promedio_Caja']) * 100, 0)
+                m_anom['Desv_CB_pct']   = np.where(m_anom['Promedio_Caja'] > 0, ((m_anom['Amperios'] - m_anom['Promedio_Caja']) / m_anom['Promedio_Caja']) * 100, 0)
                 ua_bar = _to_int(cfg.get('Umbral_Alerta_pct',-5)) if cfg else -5
                 m_anom = m_anom[m_anom['Desv_CB_pct'] <= ua_bar].copy()
+                
                 if not m_anom.empty:
                     sid = 'String ID' if 'String ID' in m_anom.columns else 'String_ID'
                     m_anom['Ubicacion'] = m_anom['Equipo'].astype(str) + ' › ' + m_anom.get(sid, m_anom.get('String_ID','')).astype(str)
-                    if 'Fecha' in m_anom.columns:
-                        m_anom['Fecha'] = pd.to_datetime(m_anom['Fecha'], errors='coerce')
-                        m_anom['Fecha_str'] = m_anom['Fecha'].dt.strftime('%d/%m/%Y').fillna('-')
-                    else:
-                        m_anom['Fecha_str'] = '-'
+                    m_anom['Fecha_str'] = pd.to_datetime(m_anom['Fecha'], errors='coerce').dt.strftime('%d/%m/%Y').fillna('-') if 'Fecha' in m_anom.columns else '-'
                     m_anom['Amp_display'] = m_anom['Amperios']
-                    m_anom['Tipo']     = m_anom['Desv_CB_pct'].apply(
-                        lambda d: 'Crítico (-15% a -30%)' if d <= -15 else 'Alerta (-5% a -15%)')
+                    m_anom['Tipo']     = m_anom['Desv_CB_pct'].apply(lambda d: 'Crítico (-15% a -30%)' if d <= -15 else 'Alerta (-5% a -15%)')
                     m_anom['Inversor'] = m_anom['Equipo'].str.split('>').str[0]
                     m_anom['Caja']     = m_anom['Equipo'].str.split('>').str[-1]
                     m_anom['String']   = m_anom.get(sid, '')
@@ -163,8 +156,7 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                     m_anom['Desv_pct'] = m_anom['Desv_CB_pct']
                     m_anom['Fuente']   = 'Medicion'
                     cols_bar = ['Ubicacion','Amp_display','Tipo','Fecha_str','Inversor','Caja','String','Polaridad','Amperios','Nota','Irradiancia_Wm2','Isc_ref','Desv_pct','Fuente']
-                    f_p_bar = pd.concat([f_p_bar[[c for c in cols_bar if c in f_p_bar.columns]],
-                                          m_anom[[c for c in cols_bar if c in m_anom.columns]]], ignore_index=True)
+                    f_p_bar = pd.concat([f_p_bar[[c for c in cols_bar if c in f_p_bar.columns]], m_anom[[c for c in cols_bar if c in m_anom.columns]]], ignore_index=True)
 
             f_p_bar_sorted = f_p_bar.sort_values('Fecha_str', na_position='last')
             fig_h = px.bar(
@@ -172,7 +164,7 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                 x='Ubicacion', y='Amp_display',
                 color='Tipo',
                 color_discrete_map=COLOR_FALLAS,
-                title=f"Fusibles registrados — {n_f} eventos",
+                title=f"Fusibles y anomalías registradas ({len(f_p_bar_sorted)})",
                 custom_data=['Fecha_str','Inversor','Caja','String','Polaridad','Amperios','Nota','Irradiancia_Wm2','Isc_ref','Desv_pct']
             )
             fig_h.update_traces(
@@ -191,15 +183,13 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                 height=340, plot_bgcolor='white', paper_bgcolor='white',
                 margin=dict(t=45,b=60,l=40,r=20),
                 xaxis=dict(tickangle=-35, title='', showgrid=False),
-                yaxis=dict(title='Amperios (A)', showgrid=True, gridcolor='#f0f0f0',
-                           range=[0, max(f_p_bar['Amp_display'].max()*1.3, 10)]),
+                yaxis=dict(title='Amperios (A)', showgrid=True, gridcolor='#f0f0f0', range=[0, max(f_p_bar['Amp_display'].max()*1.3, 10)]),
                 legend=dict(orientation='h', y=-0.25),
             )
-            st.plotly_chart(fig_h, width='stretch')
+            st.plotly_chart(fig_h, use_container_width=True)
 
         with c_pie:
-            tipos_prob = ['OC (0A)','Fallo grave (<-30%)','Crítico (-15% a -30%)',
-                          'Alerta (-5% a -15%)','Fatiga (<4A)','Alerta (4-6A)','Sobrecarga (>8A)','Sobrecarga (>+15%)']
+            tipos_prob = ['OC (0A)','Fallo grave (<-30%)','Crítico (-15% a -30%)','Alerta (-5% a -15%)','Fatiga (<4A)','Alerta (4-6A)','Sobrecarga (>8A)','Sobrecarga (>+15%)']
             n_prob = len(f_p[f_p['Tipo'].isin(tipos_prob)])
             n_ok   = max(0, total_strings_planta - n_prob)
 
@@ -209,37 +199,36 @@ def render(planta_id, nombre, f_p, cfg, df_tec, df_asig, m_p=pd.DataFrame()):
                 fila_ok = pd.DataFrame([{'Estado': f'Sin falla ({n_ok})', 'Cantidad': n_ok}])
                 df_torta = pd.concat([fila_ok, conteo_tipos], ignore_index=True)
                 color_map_torta = {**COLOR_FALLAS, **{f'Sin falla ({n_ok})': '#1E8449'}}
+                
                 fig_p = px.pie(
                     df_torta, names='Estado', values='Cantidad',
-                    title=f"Estado de strings ({total_strings_planta} total)",
+                    title=f"Estado general de strings",
                     color='Estado',
                     color_discrete_map=color_map_torta,
                     hole=0.55
                 )
-                fig_p.update_layout(
-                    height=360, paper_bgcolor='white',
-                    legend=dict(orientation='h', y=-0.18, font=dict(size=10)),
-                    margin=dict(t=60,b=40,l=10,r=10),
-                    title=dict(y=0.97, x=0.5, xanchor='center', yanchor='top')
-                )
+                fig_p.update_layout(height=360, paper_bgcolor='white', legend=dict(orientation='h', y=-0.18, font=dict(size=10)), margin=dict(t=60,b=40,l=10,r=10), title=dict(y=0.97, x=0.5, xanchor='center', yanchor='top'))
             else:
-                fig_p = px.pie(
-                    f_p, names='Tipo',
-                    title=f"Clasificación — {n_f} fusibles",
-                    color_discrete_map=COLOR_FALLAS,
-                    hole=0.55
-                )
+                fig_p = px.pie(f_p, names='Tipo', title=f"Clasificación de fallas", color_discrete_map=COLOR_FALLAS, hole=0.55)
                 fig_p.update_layout(height=340, paper_bgcolor='white', margin=dict(t=45,b=20,l=10,r=10))
-            st.plotly_chart(fig_p, width='stretch')
+            
+            st.plotly_chart(fig_p, use_container_width=True)
 
+        # 👇 LA TABLA DE DETALLE 👇
         st.markdown('<div class="section-hdr">📋 Detalle de Fusibles Registrados</div>', unsafe_allow_html=True)
         cols_show = ['Fecha','Inversor','Caja','String','Polaridad','Amperios','Irradiancia_Wm2','Isc_ref','Desv_pct','Tipo','Nota']
         cols_show = [c for c in cols_show if c in f_p.columns]
         df_show = f_p[cols_show].copy()
-        if 'Irradiancia_Wm2' in df_show.columns:
+        
+        if 'Irradiancia_Wm2' in df_show.columns: 
             df_show.rename(columns={'Irradiancia_Wm2':'Irr. (W/m²)','Isc_ref':'Isc_ref (A)','Desv_pct':'Desv. %'}, inplace=True)
         if 'Fecha' in df_show.columns: 
             df_show['Fecha'] = pd.to_datetime(df_show['Fecha'], errors='coerce').dt.strftime('%d/%m/%Y')
-        st.dataframe(df_show.sort_values('Fecha',ascending=False), width='stretch', hide_index=True)
+            
+        st.dataframe(
+            df_show.sort_values('Fecha', ascending=False), 
+            use_container_width=True, 
+            hide_index=True
+        )
     else:
-        st.markdown('<div class="banner-ok">✅ No hay fallas registradas para esta planta.</div>', unsafe_allow_html=True)
+        st.info("Sin fallas registradas en este período. Cambia el filtro a 'Histórico' o registra una nueva.")

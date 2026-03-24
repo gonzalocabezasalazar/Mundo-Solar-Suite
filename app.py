@@ -305,7 +305,7 @@ elif pagina == 'usuarios':
 
 elif pagina == 'gestion':
     if puede('admin'):
-        from vistas.admin import gestion as gestion_page
+        from vistas.planta import tab_gestion as gestion_page
         gestion_page.render(DF_PLANTAS, DF_CONFIG)
     else:
         st.error('🚫 Solo administradores pueden acceder a Gestión de Plantas.')
