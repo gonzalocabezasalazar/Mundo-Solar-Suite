@@ -9,7 +9,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import timedelta
-
+from openpyxl.styles import Font, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 from components.filters import flexible_period_filter
 from components.cards import planta_card, kpi_row
 from components.theme import get_colors, theme_toggle_button

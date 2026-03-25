@@ -175,6 +175,7 @@ def _safe_get_records(ws, expected_headers):
 @st.cache_data(ttl=600, show_spinner=False)
 def cargar_plantas():
     ws = get_worksheet("Plantas")
+    # Headers basados en la imagen real del Sheet: ID, Nombre, Ubicacion, Potencia_MW, Tecnologia...
     headers = ['ID', 'Nombre', 'Ubicacion', 'Potencia_MW', 'Tecnologia',
                'Direccion', 'Estado', 'Fecha_Registro', 'Observaciones']
     data = _safe_get_records(ws, headers)
@@ -395,7 +396,7 @@ def puede(accion: str) -> bool:
         'admin':   ['ver', 'ingresar', 'editar', 'eliminar', 'admin_usuarios', 'admin'],
         'tecnico': ['ver', 'ingresar', 'editar', 'eliminar'],
         'lector':  ['ver'],
-        'cliente': ['ver'],          # Solo lectura, NO puede eliminar
+        'cliente': ['ver'],
     }
     return accion in permisos.get(rol, [])
 
@@ -519,6 +520,7 @@ def eliminar_por_id(hoja, col_id, valor_id):
             return True
     return False
 
+
 def cerrar_falla(falla_id, tecnico_id, resolucion, evidencia):
     ws = get_worksheet("Fallas")
     celdas = ws.col_values(1) # ID en la columna 1
@@ -533,3 +535,121 @@ def cerrar_falla(falla_id, tecnico_id, resolucion, evidencia):
             invalidar_cache()
             return True
     return False
+
+
+"""
+ms_data/sheets.py  —  PATCH v2
+══════════════════════════════════════════════════════════════
+CAMBIOS en esta versión:
+  1. generar_siguiente_id_planta() — lee directo desde el Sheet
+     (sin caché) para evitar IDs con timestamp o repetidos.
+  2. eliminar_planta(id_planta)     — nueva función pública que
+     elimina una fila por su ID en la hoja "Plantas".
+══════════════════════════════════════════════════════════════
+Pega este bloque REEMPLAZANDO las funciones del mismo nombre
+al final del archivo sheets.py (sección "NUEVAS FUNCIONES").
+"""
+
+# ══════════════════════════════════════════════════════════════
+# GESTIÓN DE PLANTAS — sin caché para escrituras en tiempo real
+# ══════════════════════════════════════════════════════════════
+
+def generar_siguiente_id_planta() -> str:
+    """
+    Lee la columna A de la hoja 'Plantas' directamente (sin caché)
+    para garantizar que el ID generado sea siempre el siguiente
+    correlativo correcto, incluso después de agregar/eliminar plantas.
+
+    Formato: PL-001, PL-002 … PL-999
+    """
+    try:
+        ws = get_worksheet("Plantas")
+        # col_values devuelve lista de strings; posición 0 = header
+        ids_raw = ws.col_values(1)  # Columna A
+
+        numeros = []
+        for val in ids_raw:
+            val = str(val).strip()
+            # Aceptar formatos: "PL-001", "PL001", "001" — rechazar timestamps
+            import re
+            match = re.match(r'^(?:PL[-_]?)?(\d{1,4})$', val, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                numeros.append(n)
+
+        siguiente = max(numeros) + 1 if numeros else 1
+        return f"PL-{siguiente:03d}"
+
+    except Exception as e:
+        print(f"[generar_siguiente_id_planta] Error: {e}")
+        return "PL-001"
+
+
+def agregar_nueva_planta(
+    id_planta: str,
+    nombre: str,
+    ubicacion: str,
+    tecnologia: str,
+    potencia: float,
+) -> bool:
+    """
+    Inserta una nueva fila en la hoja 'Plantas'.
+    Orden de columnas:
+      A: ID | B: Nombre | C: Ubicacion | D: Potencia_MW |
+      E: Tecnologia | F: Direccion | G: Estado | H: Fecha_Registro | I: Observaciones
+    """
+    try:
+        import datetime
+        ws = get_worksheet("Plantas")
+
+        nueva_fila = [
+            str(id_planta),                                      # A: ID
+            str(nombre).strip(),                                 # B: Nombre
+            str(ubicacion).strip(),                              # C: Ubicacion
+            float(potencia),                                     # D: Potencia_MW
+            str(tecnologia),                                     # E: Tecnologia
+            "",                                                  # F: Direccion
+            "Activa",                                            # G: Estado
+            datetime.datetime.now().strftime("%Y-%m-%d"),        # H: Fecha_Registro
+            "",                                                  # I: Observaciones
+        ]
+
+        ws.append_row(nueva_fila, value_input_option="USER_ENTERED")
+
+        # Invalidar caché para que el frontend refleje el cambio
+        invalidar_cache()
+        st.session_state.pop("datos_cargados", None)
+
+        return True
+
+    except Exception as e:
+        st.error(f"[agregar_nueva_planta] Error técnico: {e}")
+        return False
+
+
+def eliminar_planta(id_planta: str) -> bool:
+    """
+    Elimina la fila correspondiente al id_planta en la hoja 'Plantas'.
+    Busca en la columna A (ID) y borra la primera coincidencia exacta.
+
+    Returns True si se eliminó correctamente, False si no se encontró o hubo error.
+    """
+    try:
+        ws = get_worksheet("Plantas")
+        ids_col = ws.col_values(1)   # Columna A: lista de IDs (con header en pos 0)
+
+        for i, val in enumerate(ids_col):
+            if str(val).strip().upper() == str(id_planta).strip().upper():
+                fila_sheet = i + 1  # gspread usa índice 1-based
+                ws.delete_rows(fila_sheet)
+                invalidar_cache()
+                st.session_state.pop("datos_cargados", None)
+                return True
+
+        # ID no encontrado en el Sheet
+        print(f"[eliminar_planta] ID '{id_planta}' no encontrado en la hoja Plantas.")
+        return False
+
+    except Exception as e:
+        print(f"[eliminar_planta] Error: {e}")
+        return False

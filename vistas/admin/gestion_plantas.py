@@ -1,70 +1,167 @@
 """
 vistas/admin/gestion_plantas.py
 ══════════════════════════════════════════════════════════════
-Panel de administrador para la gestión y creación de plantas.
-Solución nativa sin glitches visuales de HTML.
+Panel de Administración de Activos - Mundo Solar Suite.
+
+FIXES v2:
+  - Mapeo de columnas corregido (PascalCase → display labels)
+  - ID automático PL-XXX sin timestamp
+  - Botón eliminar planta con confirmación
 ══════════════════════════════════════════════════════════════
 """
 import streamlit as st
+import time
 from components.theme import get_colors
+from ms_data.sheets import (
+    generar_siguiente_id_planta,
+    agregar_nueva_planta,
+    eliminar_planta,          # ← nueva función (ver sheets.py)
+    cargar_plantas,
+)
+
 
 def render(df_plantas, df_config):
     c = get_colors()
-    
-    # ── Header Principal ─────────────────────────────────────
-    st.markdown(f"<h2 style='color: {c['text']}; margin-top: 0;'>⚙️ Gestión Global de Plantas</h2>", unsafe_allow_html=True)
-    st.caption("Administra el portafolio de plantas de Mundo Solar Suite y registra nuevas instalaciones.")
+
+    # ── Título y Cabecera ───────────────────────────────────
+    st.markdown(
+        f"<h2 style='color:{c['text']}; margin-top:0;'>⚙️ Gestión de Plantas</h2>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Panel administrativo para el registro de activos y control de flota solar.")
     st.divider()
 
-    # ── Diseño de Columnas [Tabla | Formulario] ──────────────
-    col_lista, col_form = st.columns([2.5, 1.5], gap="large")
+    # ── Layout principal ────────────────────────────────────
+    col_lista, col_form = st.columns([2, 1], gap="large")
 
+    # ══════════════════════════════════════════════════════
+    # COLUMNA IZQUIERDA — Portafolio actual + eliminar
+    # ══════════════════════════════════════════════════════
     with col_lista:
-        st.markdown(f"<h4 style='color: {c['text']};'>🏭 Portafolio Activo</h4>", unsafe_allow_html=True)
+        st.markdown(
+            f"<h4 style='color:{c['text']};'>🏭 Portafolio Actual</h4>",
+            unsafe_allow_html=True,
+        )
+
+        # FIX: sheets.py devuelve PascalCase → mapeamos para display
+        # Columnas reales del Sheet: ID | Nombre | Ubicacion | Potencia_MW | Tecnologia
+        COL_MAP = {
+            "ID":          "ID",
+            "Nombre":      "Nombre",
+            "Ubicacion":   "Ubicación",
+            "Potencia_MW": "Potencia (MWp)",
+            "Tecnologia":  "Tecnología",
+            "Estado":      "Estado",
+        }
+
         if not df_plantas.empty:
-            # Mostrar tabla elegante con configuración nativa
+            # Solo mostrar las columnas que realmente existen
+            cols_presentes = [k for k in COL_MAP if k in df_plantas.columns]
+            df_display = df_plantas[cols_presentes].rename(columns=COL_MAP)
+
             st.dataframe(
-                df_plantas, 
-                use_container_width=True, 
+                df_display,
+                use_container_width=True,
                 hide_index=True,
-                height=420  # Ligeramente más alto para alinear con el form
+                height=400,
             )
+
+            # ── Sección Eliminar ────────────────────────────
+            st.markdown("---")
+            st.markdown(
+                f"<h5 style='color:{c['text']};'>🗑️ Eliminar Planta</h5>",
+                unsafe_allow_html=True,
+            )
+
+            # Construimos lista "PL-001 — Nombre" para el selectbox
+            opciones_plantas = {
+                f"{row['ID']} — {row['Nombre']}": row["ID"]
+                for _, row in df_plantas.iterrows()
+                if "ID" in df_plantas.columns and "Nombre" in df_plantas.columns
+            }
+
+            if opciones_plantas:
+                planta_sel = st.selectbox(
+                    "Selecciona la planta a eliminar",
+                    options=list(opciones_plantas.keys()),
+                    key="sel_eliminar_planta",
+                )
+                id_a_eliminar = opciones_plantas[planta_sel]
+
+                # Checkbox de confirmación — evita borrados accidentales
+                confirmar = st.checkbox(
+                    f"⚠️ Confirmo que quiero eliminar **{planta_sel}**",
+                    key="chk_confirmar_eliminar",
+                )
+
+                if st.button(
+                    "🗑️ Eliminar Planta",
+                    type="secondary",
+                    use_container_width=True,
+                    disabled=not confirmar,
+                ):
+                    with st.spinner("Eliminando de Google Sheets..."):
+                        ok = eliminar_planta(id_a_eliminar)
+
+                    if ok:
+                        st.success(f"✅ Planta {id_a_eliminar} eliminada correctamente.")
+                        time.sleep(1.2)
+                        st.rerun()
+                    else:
+                        st.error("❌ No se pudo eliminar la planta. Revisa los logs.")
+            else:
+                st.info("No hay plantas disponibles para eliminar.")
+
         else:
-            # Banner nativo de información
             st.info("No hay plantas registradas en la base de datos.")
 
+    # ══════════════════════════════════════════════════════
+    # COLUMNA DERECHA — Formulario nueva planta
+    # ══════════════════════════════════════════════════════
     with col_form:
-        # Colocamos el título de manera elegante DIRECTAMENTE sobre el formulario
-        st.markdown(f"<h4 style='color: {c['text']}; margin-bottom: 1rem;'>➕ Registrar Nueva Planta</h4>", unsafe_allow_html=True)
-        
-        # ── Formulario Nativo de Streamlit ───────────────────
-        # st.form ya genera su propio borde y contenedor limpio.
-        with st.form("form_nueva_planta", clear_on_submit=False):
-            # Inputs nativos
-            p_id = st.text_input("ID Interno (Ej. PL-005)", placeholder="PL-XXX")
-            p_nom = st.text_input("Nombre de la Planta", placeholder="Ej. Parque Solar El Sol")
-            p_ubi = st.text_input("Ubicación / Región", placeholder="Ej. Región de Atacama")
-            p_tec = st.selectbox("Tecnología", ["Tracker 1E", "Tracker 2E", "Estructura Fija", "RoofTop"])
-            p_pot = st.number_input("Potencia (MW)", min_value=0.0, step=0.5, format="%.1f")
-            
-            # Espaciado nativo
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            # Botón nativo
-            submit = st.form_submit_button("Guardar Planta", type="primary", use_container_width=True)
+        st.markdown(
+            f"<h4 style='color:{c['text']};'>➕ Nueva Planta</h4>",
+            unsafe_allow_html=True,
+        )
 
-            # Lógica de envío (Placeholders)
-            if submit:
-                if not p_id or not p_nom:
-                    # Alertas nativas
-                    st.error("⚠️ El ID Interno y el Nombre de la Planta son obligatorios.")
+        # FIX: ID generado fresco (sin caché) para que sea siempre el siguiente correcto
+        id_proximo = generar_siguiente_id_planta()
+
+        with st.form("form_registro_gestion", clear_on_submit=True):
+            st.text_input("ID de Planta (Automático)", value=id_proximo, disabled=True)
+
+            p_nom = st.text_input(
+                "Nombre de la Planta", placeholder="Ej. Parque Solar Atacama"
+            )
+            p_ubi = st.text_input(
+                "Ubicación / Región", placeholder="Ej. Antofagasta"
+            )
+            p_tec = st.selectbox(
+                "Tecnología", ["Tracker 1E", "Tracker 2E", "Fija", "RoofTop"]
+            )
+            p_pot = st.number_input(
+                "Potencia Inst. (MWp)", min_value=0.0, step=0.1, format="%.1f"
+            )
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            btn_guardar = st.form_submit_button(
+                "💾 Guardar en Google Sheets",
+                type="primary",
+                use_container_width=True,
+            )
+
+            if btn_guardar:
+                if not p_nom.strip() or not p_ubi.strip():
+                    st.error("⚠️ El Nombre y la Ubicación son obligatorios.")
                 else:
-                    st.success(f"✅ Los datos de la planta '{p_nom}' han sido validados correctamente.")
-                    
-                    # Estilo nativo de Info
-                    st.info(
-                        "💡 **Nota de Arquitectura:** La interfaz de administrador ya está operativa. "
-                        "El siguiente reto técnico es conectar este botón con tu función de Google Sheets "
-                        "(ej. `agregar_planta(p_id, p_nom, p_ubi, p_tec, p_pot)`) en el archivo `ms_data/sheets.py` "
-                        "para que los datos se guarden de forma permanente."
-                    )
+                    with st.spinner("Sincronizando con Google Sheets..."):
+                        exito = agregar_nueva_planta(id_proximo, p_nom, p_ubi, p_tec, p_pot)
+
+                    if exito:
+                        st.success(f"✅ Planta {id_proximo} creada exitosamente!")
+                        st.balloons()
+                        time.sleep(1.5)
+                        st.rerun()
+                    else:
+                        st.error("❌ Error al conectar con la base de datos.")
