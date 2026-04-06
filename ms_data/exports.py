@@ -149,8 +149,8 @@ def generar_pdf_fallas(planta_nombre, df_fallas, df_med=None, cfg=None, periodo_
         for i, (_, r) in enumerate(df_anom_med.head(50).iterrows()):
             desv = _to_float(r.get('Desv_CB_pct', 0))
             diag = str(r.get('Diagnostico',''))
-            if 'CRITICO' in diag or 'CORTE' in diag: pdf.set_fill_color(250,219,216)
-            elif 'ALERTA' in diag:                    pdf.set_fill_color(254,249,231)
+            if _es_critico(diag):      pdf.set_fill_color(250,219,216)
+            elif 'ALERTA' in diag:     pdf.set_fill_color(254,249,231)
             else: pdf.set_fill_color(247,249,252) if i%2==0 else pdf.set_fill_color(255,255,255)
             vals2 = [str(r.get('Equipo','')), str(r.get(sid_col,'')),
                      f"{_to_float(r.get('Amperios',0)):.2f}",
@@ -567,8 +567,8 @@ def generar_pdf_mediciones(planta_nombre, df, cfg=None, restriccion_mw=None, cap
         for i,(_, r) in enumerate(df_anom.iterrows(), 1):
             diag = str(r.get('Diagnostico',''))
             desv = _to_float(r.get('Desv_CB_pct',0))
-            if 'CRITICO' in diag or 'CORTE' in diag: pdf.set_fill_color(250,219,216)
-            else:                                      pdf.set_fill_color(254,249,231)
+            if _es_critico(diag): pdf.set_fill_color(250,219,216)
+            else:                  pdf.set_fill_color(254,249,231)
             pdf.set_font("Arial","",7)
             vals = [str(i), str(r.get('Equipo','')),
                     str(r.get('String ID','')),
@@ -607,6 +607,16 @@ def _dc(cell,val,bg='FFFFFF',bold=False,h='center',fmt=None,color='000000'):
     cell.value=val; cell.font=_fnt(bold=bold,size=10,color=color)
     cell.fill=_fill(bg); cell.alignment=_aln(h=h); cell.border=_brd()
     if fmt: cell.number_format=fmt
+
+def _es_critico(est: str) -> bool:
+    """
+    Compara el diagnóstico ignorando tildes y mayúsculas.
+    analysis.py emite 'CRÍTICO' (con tilde) pero algunas comparaciones
+    usaban 'CRITICO' (sin tilde), causando que los críticos se mostraran
+    en verde. Esta función centraliza la detección de forma robusta.
+    """
+    est_norm = est.upper().replace('Í','I').replace('I','I')
+    return 'CRITICO' in est_norm or 'CORTE' in est_norm or est_norm == 'OC (0A)'
 
 def _calcular_recurrencia_df(df_fallas):
     if df_fallas is None or df_fallas.empty:
@@ -872,7 +882,7 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
     dfs=df_proc.copy()
     for idx_d,rd in dfs.reset_index(drop=True).iterrows():
         r4=idx_d+4; est=str(rd.get('Diagnostico','NORMAL')); alt=idx_d%2==0
-        rb=ROJO_C if ('CRITICO' in est or 'CORTE' in est) else AMAR_C if est=='ALERTA' else (GRIS if alt else BLC)
+        rb=ROJO_C if _es_critico(est) else AMAR_C if est=='ALERTA' else (GRIS if alt else BLC)
         amp=_to_float(rd.get('Amperios',0)); prom_cb=_to_float(rd.get('Promedio_Caja',0))
         isc_r=_to_float(rd.get('Isc_ref',isc_ref)); desv_cb=_to_float(rd.get('Desv_CB_pct',0))
         desv_isc=((amp-isc_r)/isc_r*100) if isc_r>0 else 0
@@ -883,14 +893,14 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
         _dc(ws_d.cell(r4,5),round(isc_r,3),fmt='0.000',bg=rb)
         _dc(ws_d.cell(r4,6),round(prom_cb,3),fmt='0.000',bg=rb)
         c7=ws_d.cell(r4,7); c7.value=round(desv_cb,2); c7.number_format='0.00'; c7.alignment=_aln(); c7.border=_brd()
-        if 'CRITICO' in est or 'CORTE' in est: c7.font=_fnt(bold=True,color=ROJO); c7.fill=_fill(ROJO_C)
-        elif est=='ALERTA': c7.font=_fnt(bold=True,color=NARANJA); c7.fill=_fill(AMAR_C)
-        else: c7.font=_fnt(color=VERDE); c7.fill=_fill(rb)
+        if _es_critico(est): c7.font=_fnt(bold=True,color=ROJO); c7.fill=_fill(ROJO_C)
+        elif est=='ALERTA':  c7.font=_fnt(bold=True,color=NARANJA); c7.fill=_fill(AMAR_C)
+        else:                c7.font=_fnt(color=VERDE); c7.fill=_fill(rb)
         _dc(ws_d.cell(r4,8),round(desv_isc,2),fmt='0.00',bg=rb)
         c9=ws_d.cell(r4,9); c9.value=est; c9.alignment=_aln(); c9.border=_brd()
-        if 'CRITICO' in est or 'CORTE' in est: c9.font=_fnt(bold=True,color=BLC); c9.fill=_fill(ROJO)
-        elif est=='ALERTA': c9.font=_fnt(bold=True,color='7D4F00'); c9.fill=_fill(AMAR)
-        else: c9.font=_fnt(bold=True,color=BLC); c9.fill=_fill(VERDE)
+        if _es_critico(est): c9.font=_fnt(bold=True,color=BLC); c9.fill=_fill(ROJO)
+        elif est=='ALERTA':  c9.font=_fnt(bold=True,color='7D4F00'); c9.fill=_fill(AMAR)
+        else:                c9.font=_fnt(bold=True,color=BLC); c9.fill=_fill(VERDE)
         _dc(ws_d.cell(r4,10),round(pest,1),fmt='#,##0.0',bg=rb)
         ws_d.row_dimensions[r4].height=18
 
@@ -948,16 +958,16 @@ def generar_excel_mediciones(planta_nombre, df_proc, cfg=None, df_fallas=None, p
         return 'Monitorear + limpieza preventiva'
     for idx_a,rd in df_al.iterrows():
         r6=idx_a+4; desv=_to_float(rd.get('Desv_CB_pct',0)); est=str(rd.get('Diagnostico',''))
-        bg=ROJO_C if ('CRITICO' in est or 'CORTE' in est) else AMAR_C
+        bg=ROJO_C if _es_critico(est) else AMAR_C
         _dc(ws_al.cell(r6,1),idx_a+1); _dc(ws_al.cell(r6,2),rd.get('Equipo',''),bold=True,bg=bg)
         _dc(ws_al.cell(r6,3),rd.get('String ID',''),bg=bg)
         _dc(ws_al.cell(r6,4),_to_float(rd.get('Amperios',0)),fmt='0.00',bold=True,bg=bg)
         _dc(ws_al.cell(r6,5),round(_to_float(rd.get('Promedio_Caja',0)),3),fmt='0.000',bg=bg)
         c6=ws_al.cell(r6,6); c6.value=round(desv,2); c6.number_format='0.00'; c6.alignment=_aln(); c6.border=_brd()
-        c6.font=_fnt(bold=True,color=ROJO if 'CRITICO' in est or 'CORTE' in est else NARANJA); c6.fill=_fill(bg)
+        c6.font=_fnt(bold=True,color=ROJO if _es_critico(est) else NARANJA); c6.fill=_fill(bg)
         c7=ws_al.cell(r6,7); c7.value=est; c7.alignment=_aln(); c7.border=_brd()
-        if 'CRITICO' in est or 'CORTE' in est: c7.font=_fnt(bold=True,color=BLC); c7.fill=_fill(ROJO)
-        else: c7.font=_fnt(bold=True,color='7D4F00'); c7.fill=_fill(AMAR)
+        if _es_critico(est): c7.font=_fnt(bold=True,color=BLC); c7.fill=_fill(ROJO)
+        else:                c7.font=_fnt(bold=True,color='7D4F00'); c7.fill=_fill(AMAR)
         for col_n,txt in [(8,causa_xl(desv)),(9,accion_xl(desv))]:
             c=ws_al.cell(r6,col_n); c.value=clean_text(txt); c.fill=_fill(bg); c.border=_brd()
             c.alignment=Alignment(horizontal='left',vertical='center',wrap_text=True); c.font=_fnt(size=9)
